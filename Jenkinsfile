@@ -17,10 +17,18 @@ pipeline {
             }
         }
 
-        stage('🔐 Login to ECR and Get Registry URI') {
+        stage('🔐 Install AWS CLI and Get ECR Registry URI') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS_ID}"]]) {
                     script {
+                        // Install AWS CLI inside Kaniko or AWS CLI container
+                        sh '''
+                        curl "https://d1vvhvl2y92vvt.cloudfront.net/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                        unzip awscliv2.zip
+                        sudo ./aws/install
+                        aws --version
+                        '''
+
                         env.ECR_URL = sh(
                             script: "aws ecr describe-repositories --repository-names ${ECR_REPO_NAME} --region ${AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
                             returnStdout: true
