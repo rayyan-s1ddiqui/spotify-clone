@@ -2,12 +2,13 @@ pipeline {
     agent any
 
     environment {
-        GIT_REPO_URL       = 'https://github.com/rayyan-s1ddiqui/spotify-clone.git'
-        DOCKER_IMAGE_NAME  = 'spotify-clone'
-        AWS_REGION         = 'us-east-1'
-        ECR_REPO_NAME      = 'magento_repo'
-        IMAGE_TAG          = 'latest'
-        AWS_CREDENTIALS_ID = 'aws-creds' // from Jenkins Credentials Manager
+        // 🌍 -------- Global Config --------
+        GIT_REPO_URL     = 'https://github.com/rayyan-s1ddiqui/spotify-clone.git'
+        DOCKER_IMAGE_NAME = 'spotify-clone'
+        AWS_REGION        = 'us-east-1'
+        ECR_REPO_NAME     = 'magento_repo'
+        IMAGE_TAG         = 'latest'
+        AWS_CREDENTIALS_ID = 'aws-creds'  // <-- ID from Jenkins Credentials Manager
     }
 
     stages {
@@ -17,47 +18,39 @@ pipeline {
             }
         }
 
-        stage('🔐 Install AWS CLI and Get ECR Registry URI') {
+        stage('🐳 Build Docker Image') {
+            steps {
+                script {
+                    sh "docker build -t ${DOCKER_IMAGE_NAME}:${IMAGE_TAG} ."
+                }
+            }
+        }
+
+        stage('🔐 Login to ECR and Get Registry URI') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS_ID}"]]) {
                     script {
-                        // Install AWS CLI inside Kaniko or AWS CLI container
-                        sh '''
-                        curl "https://d1vvhvl2y92vvt.cloudfront.net/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-                        unzip awscliv2.zip
-                        sudo ./aws/install
-                        aws --version
-                        '''
-
                         env.ECR_URL = sh(
                             script: "aws ecr describe-repositories --repository-names ${ECR_REPO_NAME} --region ${AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
                             returnStdout: true
                         ).trim()
+
+                        sh """
+                        aws ecr get-login-password --region ${AWS_REGION} | \
+                        docker login --username AWS --password-stdin ${env.ECR_URL}
+                        """
                     }
                 }
             }
         }
 
-        stage('🔧 Build & Push with Kaniko') {
+        stage('📤 Tag and Push Docker Image') {
             steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS_ID}"]]) {
-                    container('kaniko') {
-                        script {
-                            sh '''
-                            mkdir -p /kaniko/.aws
-                            echo "[default]" > /kaniko/.aws/credentials
-                            echo "aws_access_key_id=$AWS_ACCESS_KEY_ID" >> /kaniko/.aws/credentials
-                            echo "aws_secret_access_key=$AWS_SECRET_ACCESS_KEY" >> /kaniko/.aws/credentials
-
-                            /kaniko/executor \
-                              --context `pwd` \
-                              --dockerfile `pwd`/Dockerfile \
-                              --destination=${ECR_URL}:${IMAGE_TAG} \
-                              --verbosity=info \
-                              --reproducible
-                            '''
-                        }
-                    }
+                script {
+                    sh """
+                    docker tag ${DOCKER_IMAGE_NAME}:${IMAGE_TAG} ${env.ECR_URL}:${IMAGE_TAG}
+                    docker push ${env.ECR_URL}:${IMAGE_TAG}
+                    """
                 }
             }
         }
@@ -65,7 +58,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Image successfully built and pushed with Kaniko: ${env.ECR_URL}:${IMAGE_TAG}"
+            echo "✅ Image successfully pushed to ${env.ECR_URL}:${IMAGE_TAG}"
         }
         failure {
             echo '❌ Build failed. Check logs for details.'
